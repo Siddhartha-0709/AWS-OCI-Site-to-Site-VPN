@@ -1,12 +1,17 @@
+variable "aws_tunnel_1_outside_ip" {
+  description = "AWS VPN Tunnel 1 outside IP address"
+  type        = string
+}
+
 module "oci_drg" {
-  source = "./modules/DRG"
-  compartment_id = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
+  source          = "./modules/DRG"
+  compartment_id  = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
 }
 
 module "oci_network" {
-  source = "./modules/VCN"
-  compartment_id = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
-  drg_id = module.oci_drg.drg_id
+  source          = "./modules/VCN"
+  compartment_id  = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
+  drg_id          = module.oci_drg.drg_id
 }
 
 module "drg_vcn_attachment" {
@@ -16,24 +21,33 @@ module "drg_vcn_attachment" {
 }
 
 module "oci_instance" {
-  source = "./modules/Instance"
-  compartment_id = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
+  source                       = "./modules/Instance"
+  compartment_id               = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
   instance_availability_domain = "Uocm:AP-MUMBAI-1-AD-1"
-  private_subnet_id = module.oci_network.private_subnet_id
+  private_subnet_id            = module.oci_network.private_subnet_id
 }
 
 
 module "oci_loadbalancer" {
-  source = "./modules/Loadbalancer"
-  compartment_ocid = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
-  public_subnet_ocid = module.oci_network.public_subnet_id
-  backend_ip = module.oci_instance.app_instance_1_private_ip
+  source              = "./modules/Loadbalancer"
+  compartment_ocid    = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
+  public_subnet_ocid  = module.oci_network.public_subnet_id
+  backend_ip          = module.oci_instance.app_instance_1_private_ip
 }
 
 
-module "oci_ipsec" {
-  source = "./modules/IPSec"
-  compartment_id = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
-  drg_id = module.oci_drg.drg_id
+module "ipsec" {
+  source          = "./modules/IPSec"
+  compartment_id  = "ocid1.compartment.oc1..aaaaaaaaoexx4dnbuigdkqj3rpuqdodbf4jjtgvclm3me7bsp7txhas2cvrq"
+  drg_id          = module.oci_drg.drg_id
   aws_tunnel_1_ip = var.aws_tunnel_1_outside_ip
+}
+
+
+output "oci_tunnel_1_public_ip" {
+  value = module.ipsec.oci_tunnel_1_public_ip
+}
+
+output "oci_tunnel_2_public_ip" {
+  value = module.ipsec.oci_tunnel_2_public_ip
 }

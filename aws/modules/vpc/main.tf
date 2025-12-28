@@ -1,4 +1,19 @@
 ################################
+# INPUT VARIABLES
+################################
+variable "oci_cpe_public_ip" {
+  description = "OCI IPSec Tunnel Public IP (use 1.1.1.1 initially, then update with real OCI tunnel IP)"
+  type        = string
+  default     = "1.1.1.1"
+}
+
+variable "use_real_cgw" {
+  description = "Set to true to switch from temp CGW to real CGW (after OCI is configured)"
+  type        = bool
+  default     = false
+}
+
+################################
 # 1. VPC
 ################################
 resource "aws_vpc" "main" {
@@ -121,49 +136,95 @@ resource "aws_vpn_gateway" "vgw" {
 }
 
 ################################
-# 7. Elastic IP (Stable CGW IP)
+# 7. Customer Gateways - TWO GATEWAYS APPROACH
 ################################
-resource "aws_eip" "cgw_eip" {
-  domain = "vpc"
 
-  tags = {
-    Name = "OCI Customer Gateway Elastic IP"
-  }
-}
-
-output "cgw_eip_ip" {
-  value = aws_eip.cgw_eip.public_ip
-}
-
-################################
-# 8. Customer Gateway (OCI Side)
-################################
-resource "aws_customer_gateway" "oci_cgw" {
+# Temporary Customer Gateway (placeholder) - Used initially
+resource "aws_customer_gateway" "oci_cgw_temp" {
   bgp_asn    = 65000
-  ip_address = aws_eip.cgw_eip.public_ip
+  ip_address = "1.1.1.1"
   type       = "ipsec.1"
-
+  
   tags = {
-    Name = "OCI Customer Gateway"
+    Name = "OCI Customer Gateway (Temporary)"
+  }
+}
+
+# Real Customer Gateway - Starts with 1.1.1.1, then updated to real OCI IP
+resource "aws_customer_gateway" "oci_cgw_real" {
+  bgp_asn    = 65000
+  ip_address = var.oci_cpe_public_ip
+  type       = "ipsec.1"
+  
+  tags = {
+    Name = "OCI Customer Gateway (Production)"
   }
 }
 
 ################################
-# 9. VPN Connection
+# 8. VPN Connection with Tunnel Configuration
+# Initially uses temp CGW, then switches to real CGW
 ################################
 resource "aws_vpn_connection" "aws_to_oci" {
   vpn_gateway_id      = aws_vpn_gateway.vgw.id
-  customer_gateway_id = aws_customer_gateway.oci_cgw.id
+  customer_gateway_id = var.use_real_cgw ? aws_customer_gateway.oci_cgw_real.id : aws_customer_gateway.oci_cgw_temp.id
   type                = "ipsec.1"
   static_routes_only  = true
+
+  # Tunnel 1 Configuration (IKEv2 for OCI)
+  tunnel1_inside_cidr   = "169.254.10.0/30"
+  tunnel1_preshared_key = "qwertyuiopasdfghjklzxcvbnm"
+  
+  tunnel1_ike_versions                 = ["ikev2"]
+  tunnel1_startup_action               = "start"
+  tunnel1_dpd_timeout_action           = "restart"
+  tunnel1_dpd_timeout_seconds          = 30
+  
+  # Phase 1 (IKE) Configuration
+  # tunnel1_phase1_encryption_algorithms = ["AES256"]
+  # tunnel1_phase1_integrity_algorithms  = ["SHA256"]
+  tunnel1_phase1_dh_group_numbers      = [14]
+  tunnel1_phase1_lifetime_seconds      = 28800
+  
+  # Phase 2 (IPSec) Configuration
+  # tunnel1_phase2_encryption_algorithms = ["AES256"]
+  # tunnel1_phase2_integrity_algorithms  = ["SHA256"]
+  tunnel1_phase2_dh_group_numbers      = [14]
+  tunnel1_phase2_lifetime_seconds      = 3600
+
+
+
+
+  # Tunnel 2 Configuration (Optional backup)
+  # tunnel2_inside_cidr   = "169.254.11.0/30"
+  # tunnel2_preshared_key = "qwertyuiopasdfghjklzxcvbnm"
+  
+  # tunnel2_ike_versions                 = ["ikev2"]
+  # tunnel2_startup_action               = "start"
+  # tunnel2_dpd_timeout_action           = "restart"
+  # tunnel2_dpd_timeout_seconds          = 30
+  
+  # tunnel2_phase1_encryption_algorithms = ["AES256"]
+  # tunnel2_phase1_integrity_algorithms  = ["SHA256"]
+  # tunnel2_phase1_dh_group_numbers      = [14]
+  # tunnel2_phase1_lifetime_seconds      = 28800
+  
+  # tunnel2_phase2_encryption_algorithms = ["AES256"]
+  # tunnel2_phase2_integrity_algorithms  = ["SHA256"]
+  # tunnel2_phase2_dh_group_numbers      = [14]
+  # tunnel2_phase2_lifetime_seconds      = 3600
 
   tags = {
     Name = "AWS to OCI VPN Connection IpSec"
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 ################################
-# 10. Static Route to OCI
+# 9. Static Route to OCI
 ################################
 resource "aws_vpn_connection_route" "oci_route" {
   vpn_connection_id      = aws_vpn_connection.aws_to_oci.id
@@ -171,18 +232,43 @@ resource "aws_vpn_connection_route" "oci_route" {
 }
 
 ################################
-# 11. Outputs (FOR OCI CONFIG)
+# 10. Outputs (FOR OCI CONFIG)
 ################################
-output "aws_cgw_public_ip" {
-  value = aws_eip.cgw_eip.public_ip
-}
-
 output "aws_tunnel_1_outside_ip" {
-  value = aws_vpn_connection.aws_to_oci.tunnel1_address
+  description = "AWS VPN Tunnel 1 Outside IP - Use this in OCI CPE"
+  value       = aws_vpn_connection.aws_to_oci.tunnel1_address
 }
 
 output "aws_tunnel_2_outside_ip" {
-  value = aws_vpn_connection.aws_to_oci.tunnel2_address
+  description = "AWS VPN Tunnel 2 Outside IP - Use this in OCI CPE (optional)"
+  value       = aws_vpn_connection.aws_to_oci.tunnel2_address
+}
+
+output "aws_tunnel_1_preshared_key" {
+  description = "Tunnel 1 Pre-shared Key"
+  value       = aws_vpn_connection.aws_to_oci.tunnel1_preshared_key
+  sensitive   = true
+}
+
+output "aws_tunnel_2_preshared_key" {
+  description = "Tunnel 2 Pre-shared Key"
+  value       = aws_vpn_connection.aws_to_oci.tunnel2_preshared_key
+  sensitive   = true
+}
+
+output "aws_vpn_connection_id" {
+  description = "VPN Connection ID"
+  value       = aws_vpn_connection.aws_to_oci.id
+}
+
+output "temp_cgw_id" {
+  description = "Temporary Customer Gateway ID (delete after migration)"
+  value       = aws_customer_gateway.oci_cgw_temp.id
+}
+
+output "real_cgw_id" {
+  description = "Real Customer Gateway ID"
+  value       = aws_customer_gateway.oci_cgw_real.id
 }
     
 output "private_subnet_id" {
@@ -192,3 +278,4 @@ output "private_subnet_id" {
 output "security_group_id" {
   value = aws_security_group.main_sg.id
 }
+
