@@ -1,72 +1,107 @@
-################################
-# INPUT VARIABLES
-################################
-variable "oci_cpe_public_ip" {
-  description = "OCI IPSec Tunnel Public IP (use 1.1.1.1 initially, then update with real OCI tunnel IP)"
+# ============================================================================
+# VARIABLES
+# ============================================================================
+variable "oci_tunnel_public_ip" {
+  description = "OCI IPSec Tunnel Public IP (from OCI output)"
   type        = string
-  default     = "1.1.1.1"
+  default     = "1.1.1.1"  # Placeholder - update after OCI provisioning
 }
 
-variable "use_real_cgw" {
-  description = "Set to true to switch from temp CGW to real CGW (after OCI is configured)"
-  type        = bool
-  default     = false
+variable "aws_region" {
+  description = "AWS Region"
+  type        = string
+  default     = "ap-south-1"
 }
 
-################################
-# 1. VPC
-################################
-resource "aws_vpc" "main" {
-  cidr_block           = "192.168.0.0/16"
+variable "aws_vpc_cidr" {
+  description = "AWS VPC CIDR block"
+  type        = string
+  default     = "192.168.0.0/16"
+}
+
+variable "oci_vcn_cidr" {
+  description = "OCI VCN CIDR block (for routing)"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "tunnel_1_shared_secret" {
+  description = "Shared secret for IPSec Tunnel 1"
+  type        = string
+  sensitive   = true
+  default     = "qwertyuiopasdfghjkl"
+}
+
+# ============================================================================
+# VPC AND NETWORKING RESOURCES
+# ============================================================================
+resource "aws_vpc" "vpc_aws_mumbai" {
+  cidr_block           = var.aws_vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
 
   tags = {
-    Name = "AWS Mumbai VPC"
+    Name = "VPC-AWS-Mumbai"
   }
 }
 
-################################
-# 2. Subnets
-################################
+# ============================================================================
+# SUBNETS
+# ============================================================================
 resource "aws_subnet" "public_subnet" {
-  vpc_id                  = aws_vpc.main.id
+  vpc_id                  = aws_vpc.vpc_aws_mumbai.id
   cidr_block              = "192.168.0.0/24"
-  availability_zone       = "ap-south-1a"
+  availability_zone       = "${var.aws_region}a"
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Public Subnet"
+    Name = "Subnet-Public"
   }
 }
 
 resource "aws_subnet" "private_subnet" {
-  vpc_id            = aws_vpc.main.id
+  vpc_id            = aws_vpc.vpc_aws_mumbai.id
   cidr_block        = "192.168.1.0/24"
-  availability_zone = "ap-south-1a"
+  availability_zone = "${var.aws_region}a"
 
   tags = {
-    Name = "Private Subnet"
+    Name = "Subnet-Private"
   }
 }
 
-################################
-# 3. Internet Gateway
-################################
+# ============================================================================
+# INTERNET GATEWAY
+# ============================================================================
 resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = aws_vpc.vpc_aws_mumbai.id
 
   tags = {
-    Name = "Internet Gateway"
+    Name = "IGW-AWS-Mumbai"
   }
 }
 
-################################
-# 4. Route Tables
-################################
-# Public RT
+# ============================================================================
+# VIRTUAL PRIVATE GATEWAY (VGW)
+# ============================================================================
+resource "aws_vpn_gateway" "vgw" {
+  vpc_id = aws_vpc.vpc_aws_mumbai.id
+
+  tags = {
+    Name = "VGW-AWS-Mumbai"
+  }
+}
+
+# Enable route propagation for VGW
+resource "aws_vpn_gateway_route_propagation" "private_propagation" {
+  vpn_gateway_id = aws_vpn_gateway.vgw.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+# ============================================================================
+# ROUTE TABLES
+# ============================================================================
 resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = aws_vpc.vpc_aws_mumbai.id
 
   route {
     cidr_block = "0.0.0.0/0"
@@ -74,7 +109,7 @@ resource "aws_route_table" "public_rt" {
   }
 
   tags = {
-    Name = "Public Route Table"
+    Name = "RT-Public-Subnet"
   }
 }
 
@@ -83,17 +118,16 @@ resource "aws_route_table_association" "public_assoc" {
   route_table_id = aws_route_table.public_rt.id
 }
 
-# Private RT (OCI traffic → VPN)
 resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = aws_vpc.vpc_aws_mumbai.id
 
   route {
-    cidr_block = "10.0.0.0/16" # OCI VCN
+    cidr_block = var.oci_vcn_cidr
     gateway_id = aws_vpn_gateway.vgw.id
   }
 
   tags = {
-    Name = "Private Route Table"
+    Name = "RT-Private-Subnet"
   }
 }
 
@@ -102,120 +136,99 @@ resource "aws_route_table_association" "private_assoc" {
   route_table_id = aws_route_table.private_rt.id
 }
 
-################################
-# 5. Security Group
-################################
+# ============================================================================
+# SECURITY GROUP
+# ============================================================================
 resource "aws_security_group" "main_sg" {
-  vpc_id = aws_vpc.main.id
-  name   = "AWS Mumbai VPC Security Group"
+  vpc_id      = aws_vpc.vpc_aws_mumbai.id
+  name        = "SG-AWS-Mumbai-Main"
+  description = "Security group for AWS Mumbai VPC"
 
+  # Allow all traffic from OCI VCN
   ingress {
+    description = "All traffic from OCI VCN"
     protocol    = "-1"
     from_port   = 0
     to_port     = 0
+    cidr_blocks = [var.oci_vcn_cidr]
+  }
+
+  # Allow SSH from anywhere (adjust as needed)
+  ingress {
+    description = "SSH from anywhere"
+    protocol    = "tcp"
+    from_port   = 22
+    to_port     = 22
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Allow ICMP for testing
+  ingress {
+    description = "ICMP from anywhere"
+    protocol    = "icmp"
+    from_port   = -1
+    to_port     = -1
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow all outbound
   egress {
+    description = "All outbound traffic"
     protocol    = "-1"
     from_port   = 0
     to_port     = 0
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
-
-################################
-# 6. VPN Gateway (VGW)
-################################
-resource "aws_vpn_gateway" "vgw" {
-  vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "VPN Gateway AWS Mumbai"
+    Name = "SG-AWS-Mumbai-Main"
   }
 }
 
-################################
-# 7. Customer Gateways - TWO GATEWAYS APPROACH
-################################
-
-# Temporary Customer Gateway (placeholder) - Used initially
-resource "aws_customer_gateway" "oci_cgw_temp" {
+# ============================================================================
+# CUSTOMER GATEWAY (Represents OCI IPSec Tunnel Endpoint)
+# ============================================================================
+resource "aws_customer_gateway" "oci_cgw" {
   bgp_asn    = 65000
-  ip_address = "1.1.1.1"
+  ip_address = var.oci_tunnel_public_ip
   type       = "ipsec.1"
-  
+
   tags = {
-    Name = "OCI Customer Gateway (Temporary)"
+    Name = "CGW-OCI-Mumbai"
   }
 }
 
-# Real Customer Gateway - Starts with 1.1.1.1, then updated to real OCI IP
-resource "aws_customer_gateway" "oci_cgw_real" {
-  bgp_asn    = 65000
-  ip_address = var.oci_cpe_public_ip
-  type       = "ipsec.1"
-  
-  tags = {
-    Name = "OCI Customer Gateway (Production)"
-  }
-}
-
-################################
-# 8. VPN Connection with Tunnel Configuration
-# Initially uses temp CGW, then switches to real CGW
-################################
-resource "aws_vpn_connection" "aws_to_oci" {
+# ============================================================================
+# SITE-TO-SITE VPN CONNECTION
+# ============================================================================
+resource "aws_vpn_connection" "aws_to_oci_vpn" {
   vpn_gateway_id      = aws_vpn_gateway.vgw.id
-  customer_gateway_id = var.use_real_cgw ? aws_customer_gateway.oci_cgw_real.id : aws_customer_gateway.oci_cgw_temp.id
+  customer_gateway_id = aws_customer_gateway.oci_cgw.id
   type                = "ipsec.1"
   static_routes_only  = true
 
-  # Tunnel 1 Configuration (IKEv2 for OCI)
+  # Tunnel 1 Configuration
   tunnel1_inside_cidr   = "169.254.10.0/30"
-  tunnel1_preshared_key = "qwertyuiopasdfghjklzxcvbnm"
-  
-  tunnel1_ike_versions                 = ["ikev2"]
-  tunnel1_startup_action               = "start"
-  tunnel1_dpd_timeout_action           = "restart"
-  tunnel1_dpd_timeout_seconds          = 30
-  
-  # Phase 1 (IKE) Configuration
-  # tunnel1_phase1_encryption_algorithms = ["AES256"]
-  # tunnel1_phase1_integrity_algorithms  = ["SHA256"]
-  tunnel1_phase1_dh_group_numbers      = [14]
-  tunnel1_phase1_lifetime_seconds      = 28800
-  
-  # Phase 2 (IPSec) Configuration
-  # tunnel1_phase2_encryption_algorithms = ["AES256"]
-  # tunnel1_phase2_integrity_algorithms  = ["SHA256"]
-  tunnel1_phase2_dh_group_numbers      = [14]
-  tunnel1_phase2_lifetime_seconds      = 3600
+  tunnel1_preshared_key = var.tunnel_1_shared_secret
 
+  # IKE Configuration
+  tunnel1_ike_versions   = ["ikev2"]
+  tunnel1_startup_action = "start"
 
+  # Dead Peer Detection
+  tunnel1_dpd_timeout_action  = "restart"
+  tunnel1_dpd_timeout_seconds = 30
 
+  # Phase 1 (IKE) Parameters
+  tunnel1_phase1_dh_group_numbers = [14]
+  tunnel1_phase1_lifetime_seconds = 28800
 
-  # Tunnel 2 Configuration (Optional backup)
-  # tunnel2_inside_cidr   = "169.254.11.0/30"
-  # tunnel2_preshared_key = "qwertyuiopasdfghjklzxcvbnm"
-  
-  # tunnel2_ike_versions                 = ["ikev2"]
-  # tunnel2_startup_action               = "start"
-  # tunnel2_dpd_timeout_action           = "restart"
-  # tunnel2_dpd_timeout_seconds          = 30
-  
-  # tunnel2_phase1_encryption_algorithms = ["AES256"]
-  # tunnel2_phase1_integrity_algorithms  = ["SHA256"]
-  # tunnel2_phase1_dh_group_numbers      = [14]
-  # tunnel2_phase1_lifetime_seconds      = 28800
-  
-  # tunnel2_phase2_encryption_algorithms = ["AES256"]
-  # tunnel2_phase2_integrity_algorithms  = ["SHA256"]
-  # tunnel2_phase2_dh_group_numbers      = [14]
-  # tunnel2_phase2_lifetime_seconds      = 3600
+  # Phase 2 (IPSec) Parameters
+  tunnel1_phase2_dh_group_numbers = [14]
+  tunnel1_phase2_lifetime_seconds = 3600
 
   tags = {
-    Name = "AWS to OCI VPN Connection IpSec"
+    Name = "VPN-AWS-to-OCI"
   }
 
   lifecycle {
@@ -223,59 +236,134 @@ resource "aws_vpn_connection" "aws_to_oci" {
   }
 }
 
-################################
-# 9. Static Route to OCI
-################################
+# ============================================================================
+# STATIC ROUTE TO OCI VCN
+# ============================================================================
 resource "aws_vpn_connection_route" "oci_route" {
-  vpn_connection_id      = aws_vpn_connection.aws_to_oci.id
-  destination_cidr_block = "10.0.0.0/16"
+  vpn_connection_id      = aws_vpn_connection.aws_to_oci_vpn.id
+  destination_cidr_block = var.oci_vcn_cidr
 }
 
-################################
-# 10. Outputs (FOR OCI CONFIG)
-################################
-output "aws_tunnel_1_outside_ip" {
-  description = "AWS VPN Tunnel 1 Outside IP - Use this in OCI CPE"
-  value       = aws_vpn_connection.aws_to_oci.tunnel1_address
+# ============================================================================
+# OUTPUTS
+# ============================================================================
+
+# VPC Outputs
+output "vpc_id" {
+  value       = aws_vpc.vpc_aws_mumbai.id
+  description = "AWS VPC ID"
 }
 
-output "aws_tunnel_2_outside_ip" {
-  description = "AWS VPN Tunnel 2 Outside IP - Use this in OCI CPE (optional)"
-  value       = aws_vpn_connection.aws_to_oci.tunnel2_address
+output "vpc_cidr" {
+  value       = aws_vpc.vpc_aws_mumbai.cidr_block
+  description = "AWS VPC CIDR block"
 }
 
-output "aws_tunnel_1_preshared_key" {
-  description = "Tunnel 1 Pre-shared Key"
-  value       = aws_vpn_connection.aws_to_oci.tunnel1_preshared_key
-  sensitive   = true
+# Subnet Outputs
+output "public_subnet_id" {
+  value       = aws_subnet.public_subnet.id
+  description = "Public Subnet ID"
 }
 
-output "aws_tunnel_2_preshared_key" {
-  description = "Tunnel 2 Pre-shared Key"
-  value       = aws_vpn_connection.aws_to_oci.tunnel2_preshared_key
-  sensitive   = true
-}
-
-output "aws_vpn_connection_id" {
-  description = "VPN Connection ID"
-  value       = aws_vpn_connection.aws_to_oci.id
-}
-
-output "temp_cgw_id" {
-  description = "Temporary Customer Gateway ID (delete after migration)"
-  value       = aws_customer_gateway.oci_cgw_temp.id
-}
-
-output "real_cgw_id" {
-  description = "Real Customer Gateway ID"
-  value       = aws_customer_gateway.oci_cgw_real.id
-}
-    
 output "private_subnet_id" {
-  value = aws_subnet.private_subnet.id
+  value       = aws_subnet.private_subnet.id
+  description = "Private Subnet ID"
 }
 
+# Security Group
 output "security_group_id" {
-  value = aws_security_group.main_sg.id
+  value       = aws_security_group.main_sg.id
+  description = "Main Security Group ID"
 }
 
+# VPN Gateway
+output "vpn_gateway_id" {
+  value       = aws_vpn_gateway.vgw.id
+  description = "Virtual Private Gateway ID"
+}
+
+# Customer Gateway
+output "customer_gateway_id" {
+  value       = aws_customer_gateway.oci_cgw.id
+  description = "Customer Gateway ID"
+}
+
+# VPN Connection
+output "vpn_connection_id" {
+  value       = aws_vpn_connection.aws_to_oci_vpn.id
+  description = "Site-to-Site VPN Connection ID"
+}
+
+# AWS Tunnel Endpoints (Use this as CPE IP in OCI)
+output "aws_tunnel_1_public_ip" {
+  value       = aws_vpn_connection.aws_to_oci_vpn.tunnel1_address
+  description = "AWS VPN Tunnel 1 public IP - Use this as CPE IP address in OCI"
+}
+
+output "aws_tunnel_1_status" {
+  value       = aws_vpn_connection.aws_to_oci_vpn.tunnel1_status
+  description = "AWS Tunnel 1 connection status"
+}
+
+output "aws_tunnel_1_inside_cidr" {
+  value       = aws_vpn_connection.aws_to_oci_vpn.tunnel1_inside_cidr
+  description = "AWS Tunnel 1 inside CIDR (for BGP if needed)"
+}
+
+# Sensitive outputs
+output "tunnel_1_preshared_key" {
+  value       = aws_vpn_connection.aws_to_oci_vpn.tunnel1_preshared_key
+  description = "Tunnel 1 pre-shared key"
+  sensitive   = true
+}
+
+# ============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# ============================================================================
+# 
+# STEP-BY-STEP DEPLOYMENT:
+# 
+# 1. INITIAL DEPLOYMENT (with placeholder):
+#    terraform apply -var="oci_tunnel_public_ip=1.1.1.1"
+#    
+#    This creates AWS VPN with placeholder Customer Gateway
+#    Note: VPN will be in "DOWN" state - this is expected
+#
+# 2. GET AWS TUNNEL IP:
+#    terraform output aws_tunnel_1_public_ip
+#    
+#    Copy this IP address
+#
+# 3. DEPLOY OCI INFRASTRUCTURE:
+#    Update OCI terraform with:
+#    - aws_vpn_gateway_ip = <aws_tunnel_1_public_ip from step 2>
+#    - tunnel_1_shared_secret = "qwertyuiopasdfghjkl"
+#    
+#    terraform apply (on OCI side)
+#
+# 4. GET OCI TUNNEL IP:
+#    terraform output oci_vpn_tunnel_public_ip (from OCI)
+#    
+#    Copy this IP address
+#
+# 5. UPDATE AWS WITH REAL OCI IP:
+#    terraform apply -var="oci_tunnel_public_ip=<oci_vpn_tunnel_public_ip>"
+#    
+#    This will:
+#    - Update the Customer Gateway with real OCI IP
+#    - Recreate the VPN connection (AWS requirement)
+#    - Establish the tunnel connection
+#
+# 6. VERIFY CONNECTION:
+#    Check tunnel status:
+#    - AWS Console: VPC → Site-to-Site VPN Connections
+#    - OCI Console: Networking → IPSec Connections
+#    
+#    Both sides should show "UP" status
+#
+# 7. TEST CONNECTIVITY:
+#    - Launch EC2 instance in private subnet
+#    - Launch OCI compute instance in private subnet  
+#    - Test ping between instances using private IPs
+#
+# ============================================================================
