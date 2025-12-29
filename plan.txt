@@ -1,4 +1,0 @@
-aws_ec2_instance_private_ip = "192.168.1.155"
-aws_tunnel_1_outside_ip = "3.111.79.20"
-aws_tunnel_1_preshared_key = <sensitive>
-aws_tunnel_2_outside_ip = "13.233.61.252"

@@ -22,9 +22,3 @@ variable "image_ocid" {
   description = "OCI Instance Image OCID"
 }
 
-variable "instance_availability_domain" {
-  type        = string
-  default     = "Uocm:AP-MUMBAI-1-AD-1"
-  description = "OCI Instance Availability Domain"
-}
-

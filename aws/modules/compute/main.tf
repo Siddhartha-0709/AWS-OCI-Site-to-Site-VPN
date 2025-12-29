@@ -1,5 +1,8 @@
+
+
+
 resource "aws_key_pair" "example_key" {
-  key_name   = "DB_Server_Key"
+  key_name   = "AppVM-Key"
   public_key = file("/home/ubuntu/aws-oci-terraform-project/aws/keyFile/keyfile.pub")
 }
 
@@ -17,7 +20,3 @@ resource "aws_instance" "example_server" {
   }
 }
 
-
-output "instance_private_ip" {
-  value = aws_instance.example_server.private_ip
-}

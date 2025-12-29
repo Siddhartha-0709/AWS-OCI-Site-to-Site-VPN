@@ -9,4 +9,3 @@ variable security_group_id {
   default     = []
   description = "Enter the Security Group ID for the VM"
 }
-
