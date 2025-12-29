@@ -1,4 +1,4 @@
-# AWS-OCI Multi-Cloud IPSec VPN Connection - Deployment Steps
+# AWS-OCI Multi-Cloud IPSec VPN Connection
 
 ## Overview
 This project demonstrates a secure multi-cloud architecture connecting Oracle Cloud Infrastructure (OCI) and Amazon Web Services (AWS) using an IPSec VPN tunnel. The architecture implements a distributed application where the application tier runs on OCI and the database tier runs on AWS, connected through a private, encrypted IPSec tunnel.
